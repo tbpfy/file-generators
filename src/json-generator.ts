@@ -1,4 +1,4 @@
-import { writeFileSync } from "fs";
+import { createWriteStream } from "fs";
 import * as path from "path";
 
 interface JSONGeneratorConfig {
@@ -8,7 +8,8 @@ interface JSONGeneratorConfig {
     | "organization"
     | "vulnerability-assessment"
     | "compliance-framework"
-    | "nested-scan";
+    | "nested-scan"
+    | "simple-severity";
   options?: {
     maxDepth?: number;
     includeArrays?: boolean;
@@ -1314,45 +1315,117 @@ class JSONGenerator {
     };
   }
 
-  generate(config: JSONGeneratorConfig): void {
-    let jsonData: any[];
+  private generateSimpleSeverityRecord(index: number): any {
+    const severities = ["critical", "high", "moderate", "low"];
+    const adjectives = ["Security", "Network", "Application", "Database", "System", "Infrastructure", "API", "Authentication", "Authorization", "Encryption"];
+    const nouns = ["Alert", "Issue", "Finding", "Incident", "Event", "Anomaly", "Violation", "Breach", "Vulnerability", "Risk"];
+    
+    return {
+      id: this.generateUUID(),
+      name: `${this.getRandomChoice(adjectives)} ${this.getRandomChoice(nouns)} ${index.toString().padStart(6, "0")}`,
+      severity: this.getRandomChoice(severities)
+    };
+  }
 
-    switch (config.format) {
-      case "organization":
-        jsonData = Array.from({ length: config.totalRecords }, (_, i) =>
-          this.generateOrganizationRecord(i)
-        );
-        break;
-      case "vulnerability-assessment":
-        jsonData = Array.from({ length: config.totalRecords }, (_, i) =>
-          this.generateVulnerabilityAssessmentRecord(i)
-        );
-        break;
-      case "compliance-framework":
-        jsonData = Array.from({ length: config.totalRecords }, (_, i) =>
-          this.generateComplianceFrameworkRecord(i)
-        );
-        break;
-      case "nested-scan":
-        jsonData = Array.from({ length: config.totalRecords }, (_, i) =>
-          this.generateNestedScanRecord(i)
-        );
-        break;
-      default:
-        jsonData = Array.from({ length: config.totalRecords }, (_, i) =>
-          this.generateOrganizationRecord(i)
-        );
-        break;
-    }
-
-    const jsonContent = JSON.stringify(jsonData, null, 2);
+  async generate(config: JSONGeneratorConfig): Promise<void> {
     const filePath = path.join(process.cwd(), 'generated', config.filename);
-    writeFileSync(filePath, jsonContent, "utf8");
+    const writeStream = createWriteStream(filePath, { 
+      encoding: 'utf8',
+      highWaterMark: 1024 * 1024 // 1MB buffer
+    });
+    
+    let totalBytes = 0;
+    
+    // Helper function to write with backpressure handling
+    const writeWithBackpressure = (chunk: string): Promise<void> => {
+      return new Promise((resolve, reject) => {
+        const canContinue = writeStream.write(chunk);
+        totalBytes += chunk.length;
+        
+        if (canContinue) {
+          resolve();
+        } else {
+          // Wait for drain event before continuing
+          writeStream.once('drain', resolve);
+        }
+        
+        writeStream.once('error', reject);
+      });
+    };
+    
+    try {
+      // Write opening bracket
+      await writeWithBackpressure('[\n');
 
-    console.info(`JSON file generated: ${filePath}`);
-    console.info(`Format: ${config.format}`);
-    console.info(`Records: ${config.totalRecords}`);
-    console.info(`File size: ${Math.round(jsonContent.length / 1024)} KB`);
+      // Determine which generator function to use
+      let generateRecord: (index: number) => any;
+      switch (config.format) {
+        case "organization":
+          generateRecord = (i) => this.generateOrganizationRecord(i);
+          break;
+        case "vulnerability-assessment":
+          generateRecord = (i) => this.generateVulnerabilityAssessmentRecord(i);
+          break;
+        case "compliance-framework":
+          generateRecord = (i) => this.generateComplianceFrameworkRecord(i);
+          break;
+        case "nested-scan":
+          generateRecord = (i) => this.generateNestedScanRecord(i);
+          break;
+        case "simple-severity":
+          generateRecord = (i) => this.generateSimpleSeverityRecord(i);
+          break;
+        default:
+          generateRecord = (i) => this.generateOrganizationRecord(i);
+          break;
+      }
+
+      // Generate and write records one at a time
+      for (let i = 0; i < config.totalRecords; i++) {
+        const record = generateRecord(i);
+        const recordJson = JSON.stringify(record, null, 2);
+        
+        // Indent the record by 2 spaces
+        const indentedRecord = recordJson
+          .split('\n')
+          .map(line => '  ' + line)
+          .join('\n');
+        
+        await writeWithBackpressure(indentedRecord);
+        
+        // Add comma if not the last record
+        if (i < config.totalRecords - 1) {
+          await writeWithBackpressure(',\n');
+        } else {
+          await writeWithBackpressure('\n');
+        }
+        
+        // Log progress every 100 records
+        if ((i + 1) % 100 === 0) {
+          console.info(`Progress: ${i + 1}/${config.totalRecords} records written...`);
+        }
+      }
+
+      // Write closing bracket
+      await writeWithBackpressure(']');
+      
+      // Close the stream and wait for finish
+      await new Promise<void>((resolve, reject) => {
+        writeStream.end();
+        writeStream.on('finish', resolve);
+        writeStream.on('error', reject);
+      });
+
+      console.info(`JSON file generated: ${filePath}`);
+      console.info(`Format: ${config.format}`);
+      console.info(`Records: ${config.totalRecords}`);
+      console.info(`File size: ${Math.round(totalBytes / 1024)} KB`);
+      
+    } catch (error) {
+      console.error(`Error writing file: ${error instanceof Error ? error.message : String(error)}`);
+      writeStream.destroy();
+      process.exit(1);
+    }
   }
 }
 
@@ -1391,7 +1464,7 @@ function createNestedScanConfig(): JSONGeneratorConfig {
 function createLargeOrganizationConfig(): JSONGeneratorConfig {
   return {
     filename: "large-organization-data.json",
-    totalRecords: 700, // ~14MiB
+    totalRecords: 70,
     format: "organization",
   };
 }
@@ -1399,7 +1472,7 @@ function createLargeOrganizationConfig(): JSONGeneratorConfig {
 function createLargeVulnerabilityConfig(): JSONGeneratorConfig {
   return {
     filename: "large-vulnerability-assessment.json",
-    totalRecords: 1300, // ~14MiB
+    totalRecords: 1300,
     format: "vulnerability-assessment",
   };
 }
@@ -1407,7 +1480,7 @@ function createLargeVulnerabilityConfig(): JSONGeneratorConfig {
 function createLargeComplianceConfig(): JSONGeneratorConfig {
   return {
     filename: "large-compliance-framework.json",
-    totalRecords: 320, // ~14MiB
+    totalRecords: 800,
     format: "compliance-framework",
   };
 }
@@ -1415,12 +1488,20 @@ function createLargeComplianceConfig(): JSONGeneratorConfig {
 function createLargeNestedScanConfig(): JSONGeneratorConfig {
   return {
     filename: "large-nested-scan.json",
-    totalRecords: 300, // ~14MiB
+    totalRecords: 300,
     format: "nested-scan",
   };
 }
 
-function main() {
+function createSimpleSeverityConfig(): JSONGeneratorConfig {
+  return {
+    filename: "simple.json",
+    totalRecords: 100_000,
+    format: "simple-severity",
+  };
+}
+
+async function main() {
   const generator = new JSONGenerator();
   const args = process.argv.slice(2);
 
@@ -1447,9 +1528,12 @@ function main() {
     console.info(
       "  nested-scan          - Multi-level nested scan results (8 records)"
     );
+    console.info(
+      "  simple-severity      - Flat records with id, name, severity (20,000 records)"
+    );
     console.info("  all                  - Generate all formats");
     console.info("");
-    console.info("Large formats (~14MiB each):");
+    console.info("Large formats:");
     console.info(
       "  organization-large          - Large organization data (700 records)"
     );
@@ -1457,15 +1541,16 @@ function main() {
       "  vulnerability-assessment-large - Large vulnerability data (1,300 records)"
     );
     console.info(
-      "  compliance-framework-large  - Large compliance data (320 records)"
+      "  compliance-framework-large  - Large compliance data (8,000 records)"
     );
     console.info(
-      "  nested-scan-large          - Large nested scan data (2,700 records)"
+      "  nested-scan-large          - Large nested scan data (300 records)"
     );
     console.info("");
     console.info("Examples:");
-    console.info("  npx tsx app/json-generator.ts organization");
-    console.info("  npx tsx app/json-generator.ts all");
+    console.info("  npx tsx src/json-generator.ts organization");
+    console.info("  npx tsx src/json-generator.ts simple-severity");
+    console.info("  npx tsx src/json-generator.ts all");
     console.info("");
     return;
   }
@@ -1474,39 +1559,42 @@ function main() {
 
   switch (format) {
     case "organization":
-      generator.generate(createOrganizationConfig());
+      await generator.generate(createOrganizationConfig());
       break;
     case "vulnerability-assessment":
-      generator.generate(createVulnerabilityConfig());
+      await generator.generate(createVulnerabilityConfig());
       break;
     case "compliance-framework":
-      generator.generate(createComplianceConfig());
+      await generator.generate(createComplianceConfig());
       break;
     case "nested-scan":
-      generator.generate(createNestedScanConfig());
+      await generator.generate(createNestedScanConfig());
+      break;
+    case "simple-severity":
+      await generator.generate(createSimpleSeverityConfig());
       break;
     case "organization-large":
-      generator.generate(createLargeOrganizationConfig());
+      await generator.generate(createLargeOrganizationConfig());
       break;
     case "vulnerability-assessment-large":
-      generator.generate(createLargeVulnerabilityConfig());
+      await generator.generate(createLargeVulnerabilityConfig());
       break;
     case "compliance-framework-large":
-      generator.generate(createLargeComplianceConfig());
+      await generator.generate(createLargeComplianceConfig());
       break;
     case "nested-scan-large":
-      generator.generate(createLargeNestedScanConfig());
+      await generator.generate(createLargeNestedScanConfig());
       break;
     case "all":
-      generator.generate(createOrganizationConfig());
-      generator.generate(createVulnerabilityConfig());
-      generator.generate(createComplianceConfig());
-      generator.generate(createNestedScanConfig());
+      await generator.generate(createOrganizationConfig());
+      await generator.generate(createVulnerabilityConfig());
+      await generator.generate(createComplianceConfig());
+      await generator.generate(createNestedScanConfig());
       break;
     default:
       console.error(`Unknown format: ${format}`);
       console.info(
-        "Available formats: organization, vulnerability-assessment, compliance-framework, nested-scan, organization-large, vulnerability-assessment-large, compliance-framework-large, nested-scan-large, all"
+        "Available formats: organization, vulnerability-assessment, compliance-framework, nested-scan, simple-severity, organization-large, vulnerability-assessment-large, compliance-framework-large, nested-scan-large, all"
       );
       process.exit(1);
   }

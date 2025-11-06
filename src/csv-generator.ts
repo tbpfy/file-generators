@@ -126,7 +126,7 @@ function createLargeTestConfig(): GeneratorConfig {
 
   return {
     filename: 'large-test-data.csv',
-    totalRecords: 100_000,
+    totalRecords: 10_000,
     columns,
   };
 }

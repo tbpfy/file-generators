@@ -1,4 +1,4 @@
-import { writeFileSync } from 'fs';
+import { createWriteStream, WriteStream } from 'fs';
 import { join } from 'path';
 
 interface XMLGeneratorConfig {
@@ -40,7 +40,37 @@ interface NessusItem {
   riskFactor: 'None' | 'Low' | 'Medium' | 'High' | 'Critical';
 }
 
+/**
+ * XMLGenerator - Streaming XML file generator
+ * 
+ * This generator uses Node.js WriteStream to directly write XML content to disk,
+ * bypassing the string length limitation (~500MB-1GB depending on system).
+ * This allows generation of files 3GB+ without memory constraints.
+ * 
+ * All generator methods write directly to the stream instead of building
+ * large strings in memory, making it suitable for generating massive datasets.
+ * 
+ * Implements proper backpressure handling to prevent memory buildup during
+ * large file generation.
+ */
 class XMLGenerator {
+  /**
+   * Write to stream and handle backpressure.
+   * Returns a promise that resolves when it's safe to continue writing.
+   */
+  private async writeWithBackpressure(stream: WriteStream, data: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!stream.write(data)) {
+        // Buffer is full, wait for drain event
+        stream.once('drain', resolve);
+        stream.once('error', reject);
+      } else {
+        // Buffer has space, can continue immediately
+        resolve();
+      }
+    });
+  }
+
   private generateUniqueId(): string {
     return Math.floor(Math.random() * 9000000000000000000 + 1000000000000000000).toString();
   }
@@ -129,338 +159,399 @@ class XMLGenerator {
     };
   }
 
-  private generateBurpXML(config: XMLGeneratorConfig): string {
+  private async generateBurpXML(stream: WriteStream, config: XMLGeneratorConfig): Promise<void> {
     const timestamp = new Date().toUTCString();
     const burpVersion = '2024.12.5';
 
-    let xml = `<?xml version="1.0" encoding="UTF-8"?>\n`;
-    xml += `<issues burpVersion="${burpVersion}" exportTime="${timestamp}">\n`;
+    stream.write(`<?xml version="1.0" encoding="UTF-8"?>\n`);
+    stream.write(`<issues burpVersion="${burpVersion}" exportTime="${timestamp}">\n`);
 
     for (let i = 0; i < config.totalRecords; i++) {
       const issue = this.generateBurpIssue();
 
-      xml += `  <issue>\n`;
-      xml += `    <serialNumber>${issue.serialNumber}</serialNumber>\n`;
-      xml += `    <type>${issue.type}</type>\n`;
-      xml += `    <name><![CDATA[${issue.name}]]></name>\n`;
-      xml += `    <host ip="${issue.ip}">${issue.host}</host>\n`;
-      xml += `    <path><![CDATA[${issue.path}]]></path>\n`;
-      xml += `    <location><![CDATA[${issue.location}]]></location>\n`;
-      xml += `    <severity>${issue.severity}</severity>\n`;
-      xml += `    <confidence>${issue.confidence}</confidence>\n`;
-      xml += `    <issueBackground><![CDATA[${issue.issueBackground}]]></issueBackground>\n`;
-      xml += `    <issueDetail><![CDATA[${issue.issueDetail}]]></issueDetail>\n`;
+      stream.write(`  <issue>\n`);
+      stream.write(`    <serialNumber>${issue.serialNumber}</serialNumber>\n`);
+      stream.write(`    <type>${issue.type}</type>\n`);
+      stream.write(`    <name><![CDATA[${issue.name}]]></name>\n`);
+      stream.write(`    <host ip="${issue.ip}">${issue.host}</host>\n`);
+      stream.write(`    <path><![CDATA[${issue.path}]]></path>\n`);
+      stream.write(`    <location><![CDATA[${issue.location}]]></location>\n`);
+      stream.write(`    <severity>${issue.severity}</severity>\n`);
+      stream.write(`    <confidence>${issue.confidence}</confidence>\n`);
+      stream.write(`    <issueBackground><![CDATA[${issue.issueBackground}]]></issueBackground>\n`);
+      stream.write(`    <issueDetail><![CDATA[${issue.issueDetail}]]></issueDetail>\n`);
 
       // Add deeply nested vulnerability analysis
-      xml += `    <analysis>\n`;
-      xml += `      <classification>\n`;
-      xml += `        <category type="primary">${this.getRandomChoice(['injection', 'xss', 'csrf', 'auth'])}</category>\n`;
-      xml += `        <subcategory>\n`;
-      xml += `          <level1>${this.getRandomChoice(['sql', 'nosql', 'ldap', 'xpath'])}</level1>\n`;
-      xml += `          <level2>\n`;
-      xml += `            <technique>${this.getRandomChoice(['union', 'boolean', 'time', 'error'])}</technique>\n`;
-      xml += `            <complexity level="${this.getRandomChoice(['low', 'medium', 'high'])}">\n`;
-      xml += `              <factors>\n`;
-      xml += `                <authentication required="${Math.random() > 0.5}">${this.getRandomChoice(['none', 'basic', 'session'])}</authentication>\n`;
-      xml += `                <privileges>${this.getRandomChoice(['anonymous', 'user', 'admin'])}</privileges>\n`;
-      xml += `                <network>\n`;
-      xml += `                  <access>${this.getRandomChoice(['local', 'adjacent', 'network'])}</access>\n`;
-      xml += `                  <encryption>${Math.random() > 0.3}</encryption>\n`;
-      xml += `                </network>\n`;
-      xml += `              </factors>\n`;
-      xml += `            </complexity>\n`;
-      xml += `          </level2>\n`;
-      xml += `        </subcategory>\n`;
-      xml += `      </classification>\n`;
-      xml += `      <impact>\n`;
-      xml += `        <confidentiality score="${Math.floor(Math.random() * 10)}">\n`;
-      xml += `          <dataTypes>\n`;
-      xml += `            <type sensitive="${Math.random() > 0.5}">user_data</type>\n`;
-      xml += `            <type sensitive="${Math.random() > 0.5}">system_config</type>\n`;
-      xml += `          </dataTypes>\n`;
-      xml += `        </confidentiality>\n`;
-      xml += `        <integrity score="${Math.floor(Math.random() * 10)}" />\n`;
-      xml += `        <availability score="${Math.floor(Math.random() * 10)}" />\n`;
-      xml += `      </impact>\n`;
-      xml += `    </analysis>\n`;
+      stream.write(`    <analysis>\n`);
+      stream.write(`      <classification>\n`);
+      stream.write(`        <category type="primary">${this.getRandomChoice(['injection', 'xss', 'csrf', 'auth'])}</category>\n`);
+      stream.write(`        <subcategory>\n`);
+      stream.write(`          <level1>${this.getRandomChoice(['sql', 'nosql', 'ldap', 'xpath'])}</level1>\n`);
+      stream.write(`          <level2>\n`);
+      stream.write(`            <technique>${this.getRandomChoice(['union', 'boolean', 'time', 'error'])}</technique>\n`);
+      stream.write(`            <complexity level="${this.getRandomChoice(['low', 'medium', 'high'])}">\n`);
+      stream.write(`              <factors>\n`);
+      stream.write(`                <authentication required="${Math.random() > 0.5}">${this.getRandomChoice(['none', 'basic', 'session'])}</authentication>\n`);
+      stream.write(`                <privileges>${this.getRandomChoice(['anonymous', 'user', 'admin'])}</privileges>\n`);
+      stream.write(`                <network>\n`);
+      stream.write(`                  <access>${this.getRandomChoice(['local', 'adjacent', 'network'])}</access>\n`);
+      stream.write(`                  <encryption>${Math.random() > 0.3}</encryption>\n`);
+      stream.write(`                </network>\n`);
+      stream.write(`              </factors>\n`);
+      stream.write(`            </complexity>\n`);
+      stream.write(`          </level2>\n`);
+      stream.write(`        </subcategory>\n`);
+      stream.write(`      </classification>\n`);
+      stream.write(`      <impact>\n`);
+      stream.write(`        <confidentiality score="${Math.floor(Math.random() * 10)}">\n`);
+      stream.write(`          <dataTypes>\n`);
+      stream.write(`            <type sensitive="${Math.random() > 0.5}">user_data</type>\n`);
+      stream.write(`            <type sensitive="${Math.random() > 0.5}">system_config</type>\n`);
+      stream.write(`          </dataTypes>\n`);
+      stream.write(`        </confidentiality>\n`);
+      stream.write(`        <integrity score="${Math.floor(Math.random() * 10)}" />\n`);
+      stream.write(`        <availability score="${Math.floor(Math.random() * 10)}" />\n`);
+      stream.write(`      </impact>\n`);
+      stream.write(`    </analysis>\n`);
 
-      xml += `    <requestresponse>\n`;
-      xml += `      <request method="${issue.requestMethod}" base64="false"><![CDATA[${issue.requestMethod} ${issue.location} HTTP/1.1]]></request>\n`;
-      xml += `      <response base64="false"><![CDATA[HTTP/1.1 ${issue.responseStatus}]]></response>\n`;
-      xml += `    </requestresponse>\n`;
-      xml += `  </issue>\n`;
+      stream.write(`    <requestresponse>\n`);
+      stream.write(`      <request method="${issue.requestMethod}" base64="false"><![CDATA[${issue.requestMethod} ${issue.location} HTTP/1.1]]></request>\n`);
+      stream.write(`      <response base64="false"><![CDATA[HTTP/1.1 ${issue.responseStatus}]]></response>\n`);
+      stream.write(`    </requestresponse>\n`);
+      stream.write(`  </issue>\n`);
+
+      // Handle backpressure every 1000 records
+      if (i % 1000 === 0 && i > 0) {
+        await this.writeWithBackpressure(stream, '');
+        if (i % 100000 === 0) {
+          console.info(`  Progress: ${i.toLocaleString()} / ${config.totalRecords.toLocaleString()} records (${((i / config.totalRecords) * 100).toFixed(1)}%)`);
+        }
+      }
     }
 
-    xml += `</issues>\n`;
-    return xml;
+    stream.write(`</issues>\n`);
   }
 
-  private generateNessusXML(config: XMLGeneratorConfig): string {
+  private async generateNessusXML(stream: WriteStream, config: XMLGeneratorConfig): Promise<void> {
     const hostIP = this.generateRandomIP();
     const macAddress = this.generateRandomMAC();
 
-    let xml = `<?xml version="1.0" encoding="UTF-8"?>\n`;
-    xml += `<NessusClientData_v2>\n`;
-    xml += `  <Report name="Security_Scan" xmlns:cm="http://www.nessus.org/cm">\n`;
-    xml += `    <ReportHost name="${hostIP}">\n`;
-    xml += `      <HostProperties>\n`;
-    xml += `        <tag name="mac-address">${macAddress}</tag>\n`;
-    xml += `        <tag name="host-ip">${hostIP}</tag>\n`;
-    xml += `        <tag name="operating-system">Linux Ubuntu 20.04</tag>\n`;
-    xml += `        <tag name="system-type">general-purpose</tag>\n`;
-    xml += `        <tag name="Credentialed_Scan">true</tag>\n`;
-    xml += `      </HostProperties>\n\n`;
+    stream.write(`<?xml version="1.0" encoding="UTF-8"?>\n`);
+    stream.write(`<NessusClientData_v2>\n`);
+    stream.write(`  <Report name="Security_Scan" xmlns:cm="http://www.nessus.org/cm">\n`);
+    stream.write(`    <ReportHost name="${hostIP}">\n`);
+    stream.write(`      <HostProperties>\n`);
+    stream.write(`        <tag name="mac-address">${macAddress}</tag>\n`);
+    stream.write(`        <tag name="host-ip">${hostIP}</tag>\n`);
+    stream.write(`        <tag name="operating-system">Linux Ubuntu 20.04</tag>\n`);
+    stream.write(`        <tag name="system-type">general-purpose</tag>\n`);
+    stream.write(`        <tag name="Credentialed_Scan">true</tag>\n`);
+    stream.write(`      </HostProperties>\n\n`);
 
     for (let i = 0; i < config.totalRecords; i++) {
       const item = this.generateNessusItem();
 
-      xml += `      <ReportItem port="${item.port}" protocol="${item.protocol}" severity="${item.severity}" `;
-      xml += `pluginID="${item.pluginID}" pluginName="${item.pluginName}">\n`;
-      xml += `        <description>${item.description}</description>\n`;
-      xml += `        <solution>${item.solution}</solution>\n`;
-      xml += `        <risk_factor>${item.riskFactor}</risk_factor>\n`;
-      xml += `        <plugin_output>Detected service on port ${item.port}/${item.protocol}</plugin_output>\n`;
-      xml += `      </ReportItem>\n`;
+      stream.write(`      <ReportItem port="${item.port}" protocol="${item.protocol}" severity="${item.severity}" `);
+      stream.write(`pluginID="${item.pluginID}" pluginName="${item.pluginName}">\n`);
+      stream.write(`        <description>${item.description}</description>\n`);
+      stream.write(`        <solution>${item.solution}</solution>\n`);
+      stream.write(`        <risk_factor>${item.riskFactor}</risk_factor>\n`);
+      stream.write(`        <plugin_output>Detected service on port ${item.port}/${item.protocol}</plugin_output>\n`);
+      stream.write(`      </ReportItem>\n`);
+
+      // Handle backpressure every 1000 records
+      if (i % 1000 === 0 && i > 0) {
+        await this.writeWithBackpressure(stream, '');
+        if (i % 100000 === 0) {
+          console.info(`  Progress: ${i.toLocaleString()} / ${config.totalRecords.toLocaleString()} records (${((i / config.totalRecords) * 100).toFixed(1)}%)`);
+        }
+      }
     }
 
-    xml += `    </ReportHost>\n`;
-    xml += `  </Report>\n`;
-    xml += `</NessusClientData_v2>\n`;
-    return xml;
+    stream.write(`    </ReportHost>\n`);
+    stream.write(`  </Report>\n`);
+    stream.write(`</NessusClientData_v2>\n`);
   }
 
-  private generateGenericXML(config: XMLGeneratorConfig): string {
+  private async generateGenericXML(stream: WriteStream, config: XMLGeneratorConfig): Promise<void> {
     const rootElement = config.options?.rootElement || 'data';
     const includeAttributes = config.options?.includeAttributes ?? true;
     const includeCDATA = config.options?.includeCDATA ?? false;
 
-    let xml = `<?xml version="1.0" encoding="UTF-8"?>\n`;
-    xml += `<${rootElement}${includeAttributes ? ` version="1.0" generated="${new Date().toISOString()}"` : ''}>\n`;
+    stream.write(`<?xml version="1.0" encoding="UTF-8"?>\n`);
+    stream.write(`<${rootElement}${includeAttributes ? ` version="1.0" generated="${new Date().toISOString()}"` : ''}>\n`);
 
     for (let i = 0; i < config.totalRecords; i++) {
-      xml += `  <record id="${i + 1}"${includeAttributes ? ` index="${i}"` : ''}>\n`;
-      xml += `    <name>${includeCDATA ? '<![CDATA[' : ''}Record_${i.toString().padStart(6, '0')}${includeCDATA ? ']]>' : ''}</name>\n`;
-      xml += `    <value>${Math.floor(Math.random() * 1000)}</value>\n`;
-      xml += `    <category>${this.getRandomChoice(['A', 'B', 'C', 'D'])}</category>\n`;
-      xml += `    <active>${Math.random() > 0.5}</active>\n`;
-      xml += `    <metadata>\n`;
-      xml += `      <created>${new Date(Date.now() - Math.random() * 365 * 24 * 60 * 60 * 1000).toISOString()}</created>\n`;
-      xml += `      <tags>\n`;
-      xml += `        <tag>tag_${i % 5}</tag>\n`;
-      xml += `        <tag>category_${this.getRandomChoice(['alpha', 'beta', 'gamma'])}</tag>\n`;
-      xml += `      </tags>\n`;
-      xml += `    </metadata>\n`;
-      xml += `  </record>\n`;
+      stream.write(`  <record id="${i + 1}"${includeAttributes ? ` index="${i}"` : ''}>\n`);
+      stream.write(`    <name>${includeCDATA ? '<![CDATA[' : ''}Record_${i.toString().padStart(6, '0')}${includeCDATA ? ']]>' : ''}</name>\n`);
+      stream.write(`    <value>${Math.floor(Math.random() * 1000)}</value>\n`);
+      stream.write(`    <category>${this.getRandomChoice(['A', 'B', 'C', 'D'])}</category>\n`);
+      stream.write(`    <active>${Math.random() > 0.5}</active>\n`);
+      stream.write(`    <metadata>\n`);
+      stream.write(`      <created>${new Date(Date.now() - Math.random() * 365 * 24 * 60 * 60 * 1000).toISOString()}</created>\n`);
+      stream.write(`      <tags>\n`);
+      stream.write(`        <tag>tag_${i % 5}</tag>\n`);
+      stream.write(`        <tag>category_${this.getRandomChoice(['alpha', 'beta', 'gamma'])}</tag>\n`);
+      stream.write(`      </tags>\n`);
+      stream.write(`    </metadata>\n`);
+      stream.write(`  </record>\n`);
+
+      // Handle backpressure every 1000 records
+      if (i % 1000 === 0 && i > 0) {
+        await this.writeWithBackpressure(stream, '');
+        if (i % 100000 === 0) {
+          console.info(`  Progress: ${i.toLocaleString()} / ${config.totalRecords.toLocaleString()} records (${((i / config.totalRecords) * 100).toFixed(1)}%)`);
+        }
+      }
     }
 
-    xml += `</${rootElement}>\n`;
-    return xml;
+    stream.write(`</${rootElement}>\n`);
   }
 
-  private generateProjectXML(config: XMLGeneratorConfig): string {
-    let xml = `<?xml version="1.0" encoding="UTF-8"?>\n`;
-    xml += `<project version="1.0" type="FEDRAMP_REV_5">\n`;
-    xml += `  <meta>\n`;
-    xml += `    <name><![CDATA[Test Security Project]]></name>\n`;
-    xml += `    <color>#3B82F6</color>\n`;
-    xml += `    <printApplicability>true</printApplicability>\n`;
-    xml += `    <cannedText>false</cannedText>\n`;
-    xml += `  </meta>\n`;
-    xml += `  <system>\n`;
-    xml += `    <systemName><![CDATA[Test Information System]]></systemName>\n`;
-    xml += `    <systemShortName>TIS</systemShortName>\n`;
-    xml += `    <packageId>TIS-${this.generateUniqueId().slice(0, 8)}</packageId>\n`;
-    xml += `    <authorizationType>ATO</authorizationType>\n`;
-    xml += `    <status>OPERATIONAL</status>\n`;
-    xml += `  </system>\n`;
-    xml += `  <controls>\n`;
+  private async generateProjectXML(stream: WriteStream, config: XMLGeneratorConfig): Promise<void> {
+    stream.write(`<?xml version="1.0" encoding="UTF-8"?>\n`);
+    stream.write(`<project version="1.0" type="FEDRAMP_REV_5">\n`);
+    stream.write(`  <meta>\n`);
+    stream.write(`    <name><![CDATA[Test Security Project]]></name>\n`);
+    stream.write(`    <color>#3B82F6</color>\n`);
+    stream.write(`    <printApplicability>true</printApplicability>\n`);
+    stream.write(`    <cannedText>false</cannedText>\n`);
+    stream.write(`  </meta>\n`);
+    stream.write(`  <system>\n`);
+    stream.write(`    <systemName><![CDATA[Test Information System]]></systemName>\n`);
+    stream.write(`    <systemShortName>TIS</systemShortName>\n`);
+    stream.write(`    <packageId>TIS-${this.generateUniqueId().slice(0, 8)}</packageId>\n`);
+    stream.write(`    <authorizationType>ATO</authorizationType>\n`);
+    stream.write(`    <status>OPERATIONAL</status>\n`);
+    stream.write(`  </system>\n`);
+    stream.write(`  <controls>\n`);
 
     for (let i = 0; i < config.totalRecords; i++) {
       const controlId = `AC-${(i + 1).toString().padStart(2, '0')}`;
-      xml += `    <control id="${controlId}">\n`;
-      xml += `      <title><![CDATA[Access Control ${i + 1}]]></title>\n`;
-      xml += `      <description><![CDATA[This control addresses access control requirements for the system.]]></description>\n`;
-      xml += `      <implementationStatus>${this.getRandomChoice(['IMPLEMENTED', 'PARTIALLY_IMPLEMENTED', 'PLANNED', 'NOT_APPLICABLE'])}</implementationStatus>\n`;
-      xml += `      <requirements>\n`;
-      xml += `        <requirement id="${controlId}-1">\n`;
-      xml += `          <statement><![CDATA[The system shall implement access control policies.]]></statement>\n`;
-      xml += `          <implementationGuidance><![CDATA[Implement role-based access control mechanisms.]]></implementationGuidance>\n`;
-      xml += `        </requirement>\n`;
-      xml += `      </requirements>\n`;
-      xml += `    </control>\n`;
+      stream.write(`    <control id="${controlId}">\n`);
+      stream.write(`      <title><![CDATA[Access Control ${i + 1}]]></title>\n`);
+      stream.write(`      <description><![CDATA[This control addresses access control requirements for the system.]]></description>\n`);
+      stream.write(`      <implementationStatus>${this.getRandomChoice(['IMPLEMENTED', 'PARTIALLY_IMPLEMENTED', 'PLANNED', 'NOT_APPLICABLE'])}</implementationStatus>\n`);
+      stream.write(`      <requirements>\n`);
+      stream.write(`        <requirement id="${controlId}-1">\n`);
+      stream.write(`          <statement><![CDATA[The system shall implement access control policies.]]></statement>\n`);
+      stream.write(`          <implementationGuidance><![CDATA[Implement role-based access control mechanisms.]]></implementationGuidance>\n`);
+      stream.write(`        </requirement>\n`);
+      stream.write(`      </requirements>\n`);
+      stream.write(`    </control>\n`);
+
+      // Handle backpressure every 1000 records
+      if (i % 1000 === 0 && i > 0) {
+        await this.writeWithBackpressure(stream, '');
+      }
     }
 
-    xml += `  </controls>\n`;
-    xml += `</project>\n`;
-    return xml;
+    stream.write(`  </controls>\n`);
+    stream.write(`</project>\n`);
   }
 
-  private generateDeepNestedXML(config: XMLGeneratorConfig): string {
-    let xml = `<?xml version="1.0" encoding="UTF-8"?>\n`;
-    xml += `<organization id="ORG-${this.generateUniqueId().slice(0, 8)}" type="enterprise">\n`;
-    xml += `  <metadata created="${new Date().toISOString()}" version="2.1">\n`;
-    xml += `    <generator>XML Deep Nesting Generator</generator>\n`;
-    xml += `    <description><![CDATA[Complex hierarchical data with multiple navigation paths]]></description>\n`;
-    xml += `  </metadata>\n`;
+  private async generateDeepNestedXML(stream: WriteStream, config: XMLGeneratorConfig): Promise<void> {
+    stream.write(`<?xml version="1.0" encoding="UTF-8"?>\n`);
+    stream.write(`<organization id="ORG-${this.generateUniqueId().slice(0, 8)}" type="enterprise">\n`);
+    stream.write(`  <metadata created="${new Date().toISOString()}" version="2.1">\n`);
+    stream.write(`    <generator>XML Deep Nesting Generator</generator>\n`);
+    stream.write(`    <description><![CDATA[Complex hierarchical data with multiple navigation paths]]></description>\n`);
+    stream.write(`  </metadata>\n`);
 
     for (let i = 0; i < config.totalRecords; i++) {
       const deptId = `DEPT-${i.toString().padStart(3, '0')}`;
-      xml += `  <departments>\n`;
-      xml += `    <department id="${deptId}" active="${Math.random() > 0.2}">\n`;
-      xml += `      <info>\n`;
-      xml += `        <name><![CDATA[${this.getRandomChoice(['Engineering', 'Security', 'Operations', 'Finance', 'Legal', 'HR'])} Department ${i + 1}]]></name>\n`;
-      xml += `        <location>\n`;
-      xml += `          <building>${this.getRandomChoice(['North', 'South', 'East', 'West'])} Building</building>\n`;
-      xml += `          <floor level="${Math.floor(Math.random() * 20) + 1}">\n`;
-      xml += `            <zones>\n`;
-      xml += `              <zone type="restricted" clearance="${this.getRandomChoice(['PUBLIC', 'CONFIDENTIAL', 'SECRET', 'TOP_SECRET'])}">\n`;
-      xml += `                <access>\n`;
-      xml += `                  <methods>\n`;
-      xml += `                    <method type="card" required="true">\n`;
-      xml += `                      <validation>\n`;
-      xml += `                        <primary algorithm="AES256">${this.generateUniqueId().slice(0, 16)}</primary>\n`;
-      xml += `                        <secondary algorithm="RSA2048">${this.generateUniqueId().slice(0, 32)}</secondary>\n`;
-      xml += `                        <biometric>\n`;
-      xml += `                          <fingerprint enabled="${Math.random() > 0.3}" />\n`;
-      xml += `                          <retinal enabled="${Math.random() > 0.7}" />\n`;
-      xml += `                          <facial enabled="${Math.random() > 0.5}" />\n`;
-      xml += `                        </biometric>\n`;
-      xml += `                      </validation>\n`;
-      xml += `                    </method>\n`;
-      xml += `                  </methods>\n`;
-      xml += `                </access>\n`;
-      xml += `              </zone>\n`;
-      xml += `            </zones>\n`;
-      xml += `          </floor>\n`;
-      xml += `        </location>\n`;
-      xml += `      </info>\n`;
+      stream.write(`  <departments>\n`);
+      stream.write(`    <department id="${deptId}" active="${Math.random() > 0.2}">\n`);
+      stream.write(`      <info>\n`);
+      stream.write(`        <name><![CDATA[${this.getRandomChoice(['Engineering', 'Security', 'Operations', 'Finance', 'Legal', 'HR'])} Department ${i + 1}]]></name>\n`);
+      stream.write(`        <location>\n`);
+      stream.write(`          <building>${this.getRandomChoice(['North', 'South', 'East', 'West'])} Building</building>\n`);
+      stream.write(`          <floor level="${Math.floor(Math.random() * 20) + 1}">\n`);
+      stream.write(`            <zones>\n`);
+      stream.write(`              <zone type="restricted" clearance="${this.getRandomChoice(['PUBLIC', 'CONFIDENTIAL', 'SECRET', 'TOP_SECRET'])}">\n`);
+      stream.write(`                <access>\n`);
+      stream.write(`                  <methods>\n`);
+      stream.write(`                    <method type="card" required="true">\n`);
+      stream.write(`                      <validation>\n`);
+      stream.write(`                        <primary algorithm="AES256">${this.generateUniqueId().slice(0, 16)}</primary>\n`);
+      stream.write(`                        <secondary algorithm="RSA2048">${this.generateUniqueId().slice(0, 32)}</secondary>\n`);
+      stream.write(`                        <biometric>\n`);
+      stream.write(`                          <fingerprint enabled="${Math.random() > 0.3}" />\n`);
+      stream.write(`                          <retinal enabled="${Math.random() > 0.7}" />\n`);
+      stream.write(`                          <facial enabled="${Math.random() > 0.5}" />\n`);
+      stream.write(`                        </biometric>\n`);
+      stream.write(`                      </validation>\n`);
+      stream.write(`                    </method>\n`);
+      stream.write(`                  </methods>\n`);
+      stream.write(`                </access>\n`);
+      stream.write(`              </zone>\n`);
+      stream.write(`            </zones>\n`);
+      stream.write(`          </floor>\n`);
+      stream.write(`        </location>\n`);
+      stream.write(`      </info>\n`);
 
       // Personnel branch
-      xml += `      <personnel>\n`;
-      xml += `        <management>\n`;
-      xml += `          <directors>\n`;
-      xml += `            <director id="DIR-${i}-1" level="senior">\n`;
-      xml += `              <profile>\n`;
-      xml += `                <personal>\n`;
-      xml += `                  <name>Director ${i + 1}</name>\n`;
-      xml += `                  <clearance level="${this.getRandomChoice(['SECRET', 'TOP_SECRET'])}">\n`;
-      xml += `                    <validations>\n`;
-      xml += `                      <background completed="${new Date(Date.now() - Math.random() * 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}" />\n`;
-      xml += `                      <polygraph status="${this.getRandomChoice(['PASSED', 'PENDING', 'FAILED'])}" />\n`;
-      xml += `                    </validations>\n`;
-      xml += `                  </clearance>\n`;
-      xml += `                </personal>\n`;
-      xml += `                <access>\n`;
-      xml += `                  <systems>\n`;
-      xml += `                    <system name="financial" permissions="read,write,delete" />\n`;
-      xml += `                    <system name="hr" permissions="read,write" />\n`;
-      xml += `                    <system name="security" permissions="read" />\n`;
-      xml += `                  </systems>\n`;
-      xml += `                </access>\n`;
-      xml += `              </profile>\n`;
-      xml += `            </director>\n`;
-      xml += `          </directors>\n`;
-      xml += `        </management>\n`;
-      xml += `      </personnel>\n`;
+      stream.write(`      <personnel>\n`);
+      stream.write(`        <management>\n`);
+      stream.write(`          <directors>\n`);
+      stream.write(`            <director id="DIR-${i}-1" level="senior">\n`);
+      stream.write(`              <profile>\n`);
+      stream.write(`                <personal>\n`);
+      stream.write(`                  <name>Director ${i + 1}</name>\n`);
+      stream.write(`                  <clearance level="${this.getRandomChoice(['SECRET', 'TOP_SECRET'])}">\n`);
+      stream.write(`                    <validations>\n`);
+      stream.write(`                      <background completed="${new Date(Date.now() - Math.random() * 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}" />\n`);
+      stream.write(`                      <polygraph status="${this.getRandomChoice(['PASSED', 'PENDING', 'FAILED'])}" />\n`);
+      stream.write(`                    </validations>\n`);
+      stream.write(`                  </clearance>\n`);
+      stream.write(`                </personal>\n`);
+      stream.write(`                <access>\n`);
+      stream.write(`                  <systems>\n`);
+      stream.write(`                    <system name="financial" permissions="read,write,delete" />\n`);
+      stream.write(`                    <system name="hr" permissions="read,write" />\n`);
+      stream.write(`                    <system name="security" permissions="read" />\n`);
+      stream.write(`                  </systems>\n`);
+      stream.write(`                </access>\n`);
+      stream.write(`              </profile>\n`);
+      stream.write(`            </director>\n`);
+      stream.write(`          </directors>\n`);
+      stream.write(`        </management>\n`);
+      stream.write(`      </personnel>\n`);
 
       // Technology branch
-      xml += `      <technology>\n`;
-      xml += `        <infrastructure>\n`;
-      xml += `          <networks>\n`;
-      xml += `            <network type="production" vlan="${Math.floor(Math.random() * 4000) + 100}">\n`;
-      xml += `              <subnets>\n`;
-      xml += `                <subnet cidr="${this.generateRandomIP()}/24">\n`;
-      xml += `                  <security>\n`;
-      xml += `                    <firewall>\n`;
-      xml += `                      <rules>\n`;
-      xml += `                        <rule id="FW-${i}-${Math.floor(Math.random() * 100)}" action="${this.getRandomChoice(['ALLOW', 'DENY', 'LOG'])}">\n`;
-      xml += `                          <source>\n`;
-      xml += `                            <ip>${this.generateRandomIP()}</ip>\n`;
-      xml += `                            <ports>\n`;
-      xml += `                              <port protocol="tcp">${Math.floor(Math.random() * 65535) + 1}</port>\n`;
-      xml += `                              <port protocol="udp">${Math.floor(Math.random() * 65535) + 1}</port>\n`;
-      xml += `                            </ports>\n`;
-      xml += `                          </source>\n`;
-      xml += `                          <destination>\n`;
-      xml += `                            <ip>${this.generateRandomIP()}</ip>\n`;
-      xml += `                            <services>\n`;
-      xml += `                              <service name="${this.getRandomChoice(['HTTP', 'HTTPS', 'SSH', 'FTP', 'SMTP'])}" port="${Math.floor(Math.random() * 65535) + 1}" />\n`;
-      xml += `                            </services>\n`;
-      xml += `                          </destination>\n`;
-      xml += `                        </rule>\n`;
-      xml += `                      </rules>\n`;
-      xml += `                    </firewall>\n`;
-      xml += `                  </security>\n`;
-      xml += `                </subnet>\n`;
-      xml += `              </subnets>\n`;
-      xml += `            </network>\n`;
-      xml += `          </networks>\n`;
-      xml += `        </infrastructure>\n`;
-      xml += `      </technology>\n`;
+      stream.write(`      <technology>\n`);
+      stream.write(`        <infrastructure>\n`);
+      stream.write(`          <networks>\n`);
+      stream.write(`            <network type="production" vlan="${Math.floor(Math.random() * 4000) + 100}">\n`);
+      stream.write(`              <subnets>\n`);
+      stream.write(`                <subnet cidr="${this.generateRandomIP()}/24">\n`);
+      stream.write(`                  <security>\n`);
+      stream.write(`                    <firewall>\n`);
+      stream.write(`                      <rules>\n`);
+      stream.write(`                        <rule id="FW-${i}-${Math.floor(Math.random() * 100)}" action="${this.getRandomChoice(['ALLOW', 'DENY', 'LOG'])}">\n`);
+      stream.write(`                          <source>\n`);
+      stream.write(`                            <ip>${this.generateRandomIP()}</ip>\n`);
+      stream.write(`                            <ports>\n`);
+      stream.write(`                              <port protocol="tcp">${Math.floor(Math.random() * 65535) + 1}</port>\n`);
+      stream.write(`                              <port protocol="udp">${Math.floor(Math.random() * 65535) + 1}</port>\n`);
+      stream.write(`                            </ports>\n`);
+      stream.write(`                          </source>\n`);
+      stream.write(`                          <destination>\n`);
+      stream.write(`                            <ip>${this.generateRandomIP()}</ip>\n`);
+      stream.write(`                            <services>\n`);
+      stream.write(`                              <service name="${this.getRandomChoice(['HTTP', 'HTTPS', 'SSH', 'FTP', 'SMTP'])}" port="${Math.floor(Math.random() * 65535) + 1}" />\n`);
+      stream.write(`                            </services>\n`);
+      stream.write(`                          </destination>\n`);
+      stream.write(`                        </rule>\n`);
+      stream.write(`                      </rules>\n`);
+      stream.write(`                    </firewall>\n`);
+      stream.write(`                  </security>\n`);
+      stream.write(`                </subnet>\n`);
+      stream.write(`              </subnets>\n`);
+      stream.write(`            </network>\n`);
+      stream.write(`          </networks>\n`);
+      stream.write(`        </infrastructure>\n`);
+      stream.write(`      </technology>\n`);
 
       // Compliance branch
-      xml += `      <compliance>\n`;
-      xml += `        <frameworks>\n`;
-      xml += `          <framework name="${this.getRandomChoice(['SOC2', 'ISO27001', 'NIST', 'FEDRAMP'])}" version="2.0">\n`;
-      xml += `            <controls>\n`;
-      xml += `              <control id="CTRL-${i}-${Math.floor(Math.random() * 50)}" status="${this.getRandomChoice(['COMPLIANT', 'NON_COMPLIANT', 'PARTIAL'])}">\n`;
-      xml += `                <evidence>\n`;
-      xml += `                  <documents>\n`;
-      xml += `                    <document type="policy" classification="${this.getRandomChoice(['PUBLIC', 'INTERNAL', 'CONFIDENTIAL'])}">\n`;
-      xml += `                      <metadata>\n`;
-      xml += `                        <created>${new Date(Date.now() - Math.random() * 365 * 24 * 60 * 60 * 1000).toISOString()}</created>\n`;
-      xml += `                        <version>${Math.floor(Math.random() * 10) + 1}.${Math.floor(Math.random() * 10)}</version>\n`;
-      xml += `                        <approvals>\n`;
-      xml += `                          <approval role="manager" date="${new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}" />\n`;
-      xml += `                          <approval role="legal" date="${new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}" />\n`;
-      xml += `                        </approvals>\n`;
-      xml += `                      </metadata>\n`;
-      xml += `                    </document>\n`;
-      xml += `                  </documents>\n`;
-      xml += `                </evidence>\n`;
-      xml += `              </control>\n`;
-      xml += `            </controls>\n`;
-      xml += `          </framework>\n`;
-      xml += `        </frameworks>\n`;
-      xml += `      </compliance>\n`;
+      stream.write(`      <compliance>\n`);
+      stream.write(`        <frameworks>\n`);
+      stream.write(`          <framework name="${this.getRandomChoice(['SOC2', 'ISO27001', 'NIST', 'FEDRAMP'])}" version="2.0">\n`);
+      stream.write(`            <controls>\n`);
+      stream.write(`              <control id="CTRL-${i}-${Math.floor(Math.random() * 50)}" status="${this.getRandomChoice(['COMPLIANT', 'NON_COMPLIANT', 'PARTIAL'])}">\n`);
+      stream.write(`                <evidence>\n`);
+      stream.write(`                  <documents>\n`);
+      stream.write(`                    <document type="policy" classification="${this.getRandomChoice(['PUBLIC', 'INTERNAL', 'CONFIDENTIAL'])}">\n`);
+      stream.write(`                      <metadata>\n`);
+      stream.write(`                        <created>${new Date(Date.now() - Math.random() * 365 * 24 * 60 * 60 * 1000).toISOString()}</created>\n`);
+      stream.write(`                        <version>${Math.floor(Math.random() * 10) + 1}.${Math.floor(Math.random() * 10)}</version>\n`);
+      stream.write(`                        <approvals>\n`);
+      stream.write(`                          <approval role="manager" date="${new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}" />\n`);
+      stream.write(`                          <approval role="legal" date="${new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}" />\n`);
+      stream.write(`                        </approvals>\n`);
+      stream.write(`                      </metadata>\n`);
+      stream.write(`                    </document>\n`);
+      stream.write(`                  </documents>\n`);
+      stream.write(`                </evidence>\n`);
+      stream.write(`              </control>\n`);
+      stream.write(`            </controls>\n`);
+      stream.write(`          </framework>\n`);
+      stream.write(`        </frameworks>\n`);
+      stream.write(`      </compliance>\n`);
 
-      xml += `    </department>\n`;
-      xml += `  </departments>\n`;
+      stream.write(`    </department>\n`);
+      stream.write(`  </departments>\n`);
+
+      // Handle backpressure every 1000 records
+      if (i % 1000 === 0 && i > 0) {
+        await this.writeWithBackpressure(stream, '');
+        if (i % 100000 === 0) {
+          console.info(`  Progress: ${i.toLocaleString()} / ${config.totalRecords.toLocaleString()} records (${((i / config.totalRecords) * 100).toFixed(1)}%)`);
+        }
+      }
     }
 
-    xml += `</organization>\n`;
-    return xml;
+    stream.write(`</organization>\n`);
   }
 
-  generate(config: XMLGeneratorConfig): void {
-    let xmlContent: string;
-
-    switch (config.format) {
-      case 'burp':
-        xmlContent = this.generateBurpXML(config);
-        break;
-      case 'nessus':
-        xmlContent = this.generateNessusXML(config);
-        break;
-      case 'project':
-        xmlContent = this.generateProjectXML(config);
-        break;
-      case 'deep-nested':
-        xmlContent = this.generateDeepNestedXML(config);
-        break;
-      case 'generic':
-      default:
-        xmlContent = this.generateGenericXML(config);
-        break;
-    }
-
+  async generate(config: XMLGeneratorConfig): Promise<void> {
     const filePath = join(process.cwd(), 'generated', config.filename);
-    writeFileSync(filePath, xmlContent, 'utf8');
+    const stream = createWriteStream(filePath, { encoding: 'utf8' });
 
-    console.info(`XML file generated: ${filePath}`);
-    console.info(`Format: ${config.format}`);
-    console.info(`Records: ${config.totalRecords}`);
-    console.info(`File size: ${Math.round(xmlContent.length / 1024)} KB`);
+    const startTime = Date.now();
+    
+    console.info(`Generating ${config.format} XML file with ${config.totalRecords.toLocaleString()} records...`);
+
+    try {
+      switch (config.format) {
+        case 'burp':
+          await this.generateBurpXML(stream, config);
+          break;
+        case 'nessus':
+          await this.generateNessusXML(stream, config);
+          break;
+        case 'project':
+          await this.generateProjectXML(stream, config);
+          break;
+        case 'deep-nested':
+          await this.generateDeepNestedXML(stream, config);
+          break;
+        case 'generic':
+        default:
+          await this.generateGenericXML(stream, config);
+          break;
+      }
+
+      // Wait for stream to finish
+      await new Promise<void>((resolve, reject) => {
+        stream.end(() => {
+          const endTime = Date.now();
+          const fileSizeKB = stream.bytesWritten / 1024;
+          const fileSizeMB = fileSizeKB / 1024;
+          const fileSizeGB = fileSizeMB / 1024;
+          const duration = ((endTime - startTime) / 1000).toFixed(2);
+
+          console.info(`\nXML file generated: ${filePath}`);
+          console.info(`Format: ${config.format}`);
+          console.info(`Records: ${config.totalRecords.toLocaleString()}`);
+          
+          if (fileSizeGB >= 1) {
+            console.info(`File size: ${fileSizeGB.toFixed(2)} GB`);
+          } else if (fileSizeMB >= 1) {
+            console.info(`File size: ${fileSizeMB.toFixed(2)} MB`);
+          } else {
+            console.info(`File size: ${Math.round(fileSizeKB)} KB`);
+          }
+          
+          console.info(`Generation time: ${duration}s`);
+          resolve();
+        });
+        stream.on('error', reject);
+      });
+    } catch (error) {
+      console.error('Error generating XML:', error);
+      throw error;
+    }
   }
 }
 
@@ -475,7 +566,7 @@ function createBurpConfig(): XMLGeneratorConfig {
 function createLargeBurpConfig(): XMLGeneratorConfig {
   return {
     filename: 'large-burp-scan.xml',
-    totalRecords: 18000, // ~13.7MB
+    totalRecords: 180000,
     format: 'burp',
   };
 }
@@ -491,7 +582,7 @@ function createNessusConfig(): XMLGeneratorConfig {
 function createLargeNessusConfig(): XMLGeneratorConfig {
   return {
     filename: 'large-nessus-scan.xml',
-    totalRecords: 26200, // ~13.6MB
+    totalRecords: 26_200,
     format: 'nessus',
   };
 }
@@ -512,7 +603,7 @@ function createGenericConfig(): XMLGeneratorConfig {
 function createLargeGenericConfig(): XMLGeneratorConfig {
   return {
     filename: 'large-generic-data.xml',
-    totalRecords: 41300, // ~13.6MB
+    totalRecords: 413000,
     format: 'generic',
     options: {
       rootElement: 'largeTestData',
@@ -541,12 +632,49 @@ function createDeepNestedConfig(): XMLGeneratorConfig {
 function createLargeDeepNestedConfig(): XMLGeneratorConfig {
   return {
     filename: 'large-deep-nested.xml',
-    totalRecords: 3250, // ~13MB with deep nesting (4KB per record)
+    totalRecords: 32500,
     format: 'deep-nested',
   };
 }
 
-function main() {
+function createUltraLargeBurpConfig(): XMLGeneratorConfig {
+  return {
+    filename: 'ultra-large-burp-scan.xml',
+    totalRecords: 4200000, // ~3.2GB
+    format: 'burp',
+  };
+}
+
+function createUltraLargeNessusConfig(): XMLGeneratorConfig {
+  return {
+    filename: 'ultra-large-nessus-scan.xml',
+    totalRecords: 6100000, // ~3.2GB
+    format: 'nessus',
+  };
+}
+
+function createUltraLargeGenericConfig(): XMLGeneratorConfig {
+  return {
+    filename: 'ultra-large-generic-data.xml',
+    totalRecords: 9600000, // ~3.2GB
+    format: 'generic',
+    options: {
+      rootElement: 'ultraLargeTestData',
+      includeAttributes: true,
+      includeCDATA: true,
+    },
+  };
+}
+
+function createUltraLargeDeepNestedConfig(): XMLGeneratorConfig {
+  return {
+    filename: 'ultra-large-deep-nested.xml',
+    totalRecords: 800000, // ~3.2GB with deep nesting (4KB per record)
+    format: 'deep-nested',
+  };
+}
+
+async function main() {
   const generator = new XMLGenerator();
   const args = process.argv.slice(2);
 
@@ -556,7 +684,7 @@ function main() {
     console.info('Generates various XML test files for security assessments and testing');
     console.info('');
     console.info('Usage:');
-    console.info('  npx tsx app/xml-generator.ts [format]');
+    console.info('  npx tsx src/xml-generator.ts [format]');
     console.info('');
     console.info('Available formats:');
     console.info('  burp        - Burp Suite security scan format (50 issues)');
@@ -572,17 +700,17 @@ function main() {
     console.info('  generic-large     - Large generic XML (41,300 records)');
     console.info('  deep-nested-large - Large deep hierarchy (3,250 departments)');
     console.info('');
-    console.info('Examples:');
-    console.info('  npx tsx app/xml-generator.ts burp');
-    console.info('  npx tsx app/xml-generator.ts all');
+    console.info('Ultra-large formats (~3.2GB each - uses streaming):');
+    console.info('  burp-ultra        - Ultra-large Burp Suite scan (4.2M issues)');
+    console.info('  nessus-ultra      - Ultra-large Nessus scan (6.1M items)');
+    console.info('  generic-ultra     - Ultra-large generic XML (9.6M records)');
+    console.info('  deep-nested-ultra - Ultra-large deep hierarchy (800K departments)');
     console.info('');
-
-    // Generate all by default
-    generator.generate(createBurpConfig());
-    generator.generate(createNessusConfig());
-    generator.generate(createGenericConfig());
-    generator.generate(createProjectConfig());
-    generator.generate(createDeepNestedConfig());
+    console.info('Examples:');
+    console.info('  npx tsx src/xml-generator.ts burp');
+    console.info('  npx tsx src/xml-generator.ts all');
+    console.info('  npx tsx src/xml-generator.ts burp-ultra');
+    console.info('');
     return;
   }
 
@@ -590,43 +718,68 @@ function main() {
 
   switch (format) {
     case 'burp':
-      generator.generate(createBurpConfig());
+      await generator.generate(createBurpConfig());
       break;
     case 'nessus':
-      generator.generate(createNessusConfig());
+      await generator.generate(createNessusConfig());
       break;
     case 'generic':
-      generator.generate(createGenericConfig());
+      await generator.generate(createGenericConfig());
       break;
     case 'project':
-      generator.generate(createProjectConfig());
+      await generator.generate(createProjectConfig());
       break;
     case 'burp-large':
-      generator.generate(createLargeBurpConfig());
+      await generator.generate(createLargeBurpConfig());
       break;
     case 'nessus-large':
-      generator.generate(createLargeNessusConfig());
+      await generator.generate(createLargeNessusConfig());
       break;
     case 'generic-large':
-      generator.generate(createLargeGenericConfig());
+      await generator.generate(createLargeGenericConfig());
       break;
     case 'deep-nested':
-      generator.generate(createDeepNestedConfig());
+      await generator.generate(createDeepNestedConfig());
       break;
     case 'deep-nested-large':
-      generator.generate(createLargeDeepNestedConfig());
+      await generator.generate(createLargeDeepNestedConfig());
+      break;
+    case 'burp-ultra':
+      await generator.generate(createUltraLargeBurpConfig());
+      break;
+    case 'nessus-ultra':
+      await generator.generate(createUltraLargeNessusConfig());
+      break;
+    case 'generic-ultra':
+      await generator.generate(createUltraLargeGenericConfig());
+      break;
+    case 'deep-nested-ultra':
+      await generator.generate(createUltraLargeDeepNestedConfig());
       break;
     case 'all':
-      generator.generate(createBurpConfig());
-      generator.generate(createNessusConfig());
-      generator.generate(createGenericConfig());
-      generator.generate(createProjectConfig());
-      generator.generate(createDeepNestedConfig());
+      await generator.generate(createBurpConfig());
+      await generator.generate(createNessusConfig());
+      await generator.generate(createGenericConfig());
+      await generator.generate(createProjectConfig());
+      await generator.generate(createDeepNestedConfig());
+      break;
+    case 'all-large':
+      await generator.generate(createLargeBurpConfig());
+      await generator.generate(createLargeNessusConfig());
+      await generator.generate(createLargeGenericConfig());
+      await generator.generate(createLargeDeepNestedConfig());
+      break;
+    case 'all-ultra':
+      console.warn('⚠️  Warning: Generating all ultra-large files will create ~12.8GB of data!');
+      await generator.generate(createUltraLargeBurpConfig());
+      await generator.generate(createUltraLargeNessusConfig());
+      await generator.generate(createUltraLargeGenericConfig());
+      await generator.generate(createUltraLargeDeepNestedConfig());
       break;
     default:
       console.error(`Unknown format: ${format}`);
       console.info(
-        'Available formats: burp, nessus, generic, project, deep-nested, burp-large, nessus-large, generic-large, deep-nested-large, all'
+        'Available formats: burp, nessus, generic, project, deep-nested, burp-large, nessus-large, generic-large, deep-nested-large, burp-ultra, nessus-ultra, generic-ultra, deep-nested-ultra, all, all-large, all-ultra'
       );
       process.exit(1);
   }

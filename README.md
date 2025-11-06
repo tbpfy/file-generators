@@ -75,7 +75,7 @@ npx tsx src/json-generator.ts vulnerability-assessment-large
 
 ### XML Generator
 
-Generates XML files in various security assessment formats.
+Generates XML files in various security assessment formats using streaming technology to bypass Node.js string length limitations.
 
 **Command:**
 
@@ -100,6 +100,17 @@ npx tsx src/xml-generator.ts [format]
 - `nessus-large` - Large Nessus scan (26,200 items)
 - `generic-large` - Large generic XML (41,300 records)
 - `deep-nested-large` - Large deep hierarchy (3,250 departments)
+- `all-large` - Generate all large test files
+
+#### Ultra-Large Test Files (~3.2GB each)
+
+**⚠️ Note:** These use streaming and can generate files 3GB+ without memory constraints
+
+- `burp-ultra` - Ultra-large Burp Suite scan (4.2M issues)
+- `nessus-ultra` - Ultra-large Nessus scan (6.1M items)
+- `generic-ultra` - Ultra-large generic XML (9.6M records)
+- `deep-nested-ultra` - Ultra-large deep hierarchy (800K departments)
+- `all-ultra` - Generate all ultra-large test files (~12.8GB total)
 
 **Examples:**
 
@@ -113,11 +124,20 @@ npx tsx src/xml-generator.ts all
 # Generate large Nessus scan
 npx tsx src/xml-generator.ts nessus-large
 
+# Generate 3.2GB ultra-large file using streaming
+npx tsx src/xml-generator.ts burp-ultra
+
 # Generate all by default (no arguments)
 npx tsx src/xml-generator.ts
 ```
 
 **Output Location:** `generated/`
+
+**Technical Details:**
+- Uses Node.js `WriteStream` for direct-to-disk writes
+- Bypasses the ~500MB string length limitation in Node.js
+- Suitable for generating massive datasets (3GB+) with minimal memory usage
+- Generation time and file size are displayed upon completion
 
 ---
 
